@@ -48,6 +48,15 @@ jib {
     }
     to {
         image = project.findProperty('jib.to.image') ?: 'jib-example:latest'
+        // Jib 认证配置 - 支持多种方式
+        auth {
+            // 方式1: 从项目属性读取（推荐，通过命令行参数或 gradle.properties）
+            username = project.findProperty('jib.to.auth.username') ?: System.getenv('JIB_AUTH_USERNAME')
+            password = project.findProperty('jib.to.auth.password') ?: System.getenv('JIB_AUTH_PASSWORD')
+            
+            // 如果使用 Docker Hub，用户名就是 Docker Hub 用户名
+            // 如果使用其他私有仓库，需要完整的仓库地址格式
+        }
     }
     container {
         jvmFlags = ['-Xms512m', '-Xmx512m']

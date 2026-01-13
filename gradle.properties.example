@@ -1,0 +1,18 @@
+# Gradle Properties 示例文件
+# 复制此文件为 gradle.properties 并填入真实的认证信息
+# 注意: gradle.properties 已添加到 .gitignore，不会被提交到 Git
+
+# Jib 认证配置（可选）
+# 如果不想在命令行中传递密码，可以在这里配置
+# 但更推荐使用环境变量 JIB_AUTH_USERNAME 和 JIB_AUTH_PASSWORD
+
+# Docker Hub 或私有仓库用户名
+jib.to.auth.username=your-username
+
+# Docker Hub 或私有仓库密码/访问令牌
+# 注意: 不要提交包含真实密码的 gradle.properties 文件
+jib.to.auth.password=your-password-or-token
+
+# 其他可选配置
+# jib.from.image=eclipse-temurin:17-jre-alpine
+# jib.to.image=your-username/jib-example:latest

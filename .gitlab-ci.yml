@@ -1,0 +1,103 @@
+# GitLab CI/CD 配置文件
+# 使用 Jib 构建和推送 Docker 镜像到私有仓库
+
+stages:
+  - build
+  - test
+  - package
+  - deploy
+
+variables:
+  # 镜像仓库配置（可以通过 GitLab CI/CD Variables 覆盖）
+  DOCKER_REGISTRY: "${CI_REGISTRY}"  # GitLab Container Registry
+  DOCKER_IMAGE: "${CI_REGISTRY_IMAGE}"  # 格式: registry.gitlab.com/group/project
+  DOCKER_TAG: "${CI_COMMIT_SHORT_SHA}"  # 使用提交 SHA 作为标签
+
+# 构建阶段
+build:
+  stage: build
+  image: gradle:8.5-jdk17
+  script:
+    - ./gradlew build
+  artifacts:
+    paths:
+      - build/libs/
+    expire_in: 1 hour
+  only:
+    - branches
+    - tags
+
+# 测试阶段
+test:
+  stage: test
+  image: gradle:8.5-jdk17
+  script:
+    - ./gradlew test
+  artifacts:
+    reports:
+      junit: build/test-results/test/**/TEST-*.xml
+    expire_in: 1 week
+  only:
+    - branches
+    - tags
+
+# 打包 Docker 镜像并推送到 GitLab Container Registry
+package:
+  stage: package
+  image: gradle:8.5-jdk17
+  before_script:
+    # 设置 Jib 认证环境变量（使用 GitLab CI/CD Variables）
+    # 方式1: 使用 GitLab Container Registry 内置变量（推荐）
+    # 将 CI_REGISTRY_USER 转换为小写后传递给 JIB_AUTH_USERNAME
+    - export JIB_AUTH_USERNAME=$(echo "${CI_REGISTRY_USER}" | tr '[:upper:]' '[:lower:]')
+    - export JIB_AUTH_PASSWORD="${CI_REGISTRY_PASSWORD}"
+    # 方式2: 如果推送到其他仓库，使用自定义变量
+    # - export JIB_AUTH_USERNAME=$(echo "${DOCKER_USERNAME}" | tr '[:upper:]' '[:lower:]')
+    # - export JIB_AUTH_PASSWORD="${DOCKER_PASSWORD}"
+  script:
+    # 构建并推送镜像到 GitLab Container Registry
+    - |
+      ./gradlew jib \
+        -Pjib.to.image="${DOCKER_IMAGE}:${DOCKER_TAG}" \
+        -Pjib.to.image.credHelper= \
+        --info
+    # 同时打上 latest 标签（仅主分支）
+    - |
+      if [ "$CI_COMMIT_BRANCH" == "$CI_DEFAULT_BRANCH" ]; then
+        ./gradlew jib \
+          -Pjib.to.image="${DOCKER_IMAGE}:latest" \
+          -Pjib.to.image.credHelper= \
+          --info
+      fi
+  only:
+    - branches
+    - tags
+  # 可选: 添加 when: manual 来手动触发
+  # when: manual
+
+# 部署阶段（示例）
+deploy:
+  stage: deploy
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - echo "部署镜像: ${DOCKER_IMAGE}:${DOCKER_TAG}"
+    - echo "这里可以添加部署脚本，例如 kubectl、docker-compose 等"
+  only:
+    - main
+    - master
+  when: manual
+
+# 清理旧镜像（可选）
+cleanup:
+  stage: deploy
+  image: curlimages/curl:latest
+  script:
+    - |
+      echo "清理旧镜像..."
+      # 使用 GitLab API 清理旧镜像
+      # 需要配置 GITLAB_API_TOKEN 变量
+  only:
+    - schedules
+  when: manual

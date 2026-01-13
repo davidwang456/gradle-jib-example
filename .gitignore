@@ -59,3 +59,7 @@ Desktop.ini
 
 # Jib
 target/jib-image.tar
+
+# Gradle Properties (可能包含敏感信息)
+gradle.properties
+!gradle.properties.example
