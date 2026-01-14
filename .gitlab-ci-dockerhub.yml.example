@@ -1,0 +1,63 @@
+# GitLab CI/CD 配置文件示例 - 推送到 Docker Hub
+# 复制此文件为 .gitlab-ci.yml 并根据需要修改
+
+stages:
+  - build
+  - test
+  - package
+
+variables:
+  # Docker Hub 配置（通过 GitLab CI/CD Variables 设置）
+  DOCKER_HUB_USERNAME: "${DOCKER_HUB_USERNAME}"  # 需要在 GitLab 项目中设置
+  DOCKER_HUB_IMAGE: "${DOCKER_HUB_USERNAME}/jib-example"  # Docker Hub 镜像名称
+  DOCKER_TAG: "${CI_COMMIT_SHORT_SHA}"
+
+# 构建阶段
+build:
+  stage: build
+  image: gradle:8.5-jdk17
+  script:
+    - ./gradlew build
+  artifacts:
+    paths:
+      - build/libs/
+    expire_in: 1 hour
+
+# 测试阶段
+test:
+  stage: test
+  image: gradle:8.5-jdk17
+  script:
+    - ./gradlew test
+  artifacts:
+    reports:
+      junit: build/test-results/test/**/TEST-*.xml
+
+# 打包并推送到 Docker Hub
+package:
+  stage: package
+  image: gradle:8.5-jdk17
+  before_script:
+    # 设置 Jib 认证环境变量
+    # 需要在 GitLab 项目设置中添加以下 CI/CD Variables:
+    # - DOCKER_HUB_USERNAME: 你的 Docker Hub 用户名
+    # - DOCKER_HUB_PASSWORD: 你的 Docker Hub 密码或访问令牌（推荐使用访问令牌）
+    # 将用户名转换为小写（某些仓库要求小写用户名）
+    - export JIB_AUTH_USERNAME=$(echo "${DOCKER_HUB_USERNAME}" | tr '[:upper:]' '[:lower:]')
+    - export JIB_AUTH_PASSWORD="${DOCKER_HUB_PASSWORD}"
+  script:
+    # 构建并推送镜像到 Docker Hub
+    - |
+      ./gradlew jib \
+        -Pjib.to.image="${DOCKER_HUB_IMAGE}:${DOCKER_TAG}" \
+        --info
+    # 如果是主分支，同时打上 latest 标签
+    - |
+      if [ "$CI_COMMIT_BRANCH" == "$CI_DEFAULT_BRANCH" ]; then
+        ./gradlew jib \
+          -Pjib.to.image="${DOCKER_HUB_IMAGE}:latest" \
+          --info
+      fi
+  only:
+    - branches
+    - tags
