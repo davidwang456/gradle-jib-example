@@ -10,10 +10,8 @@ stages:
 variables:
   # 镜像仓库配置（可以通过 GitLab CI/CD Variables 覆盖）
   DOCKER_REGISTRY: "${CI_REGISTRY}"  # GitLab Container Registry
-  DOCKER_IMAGE: "${CI_REGISTRY_IMAGE}"  # 格式: registry.gitlab.com/group/project
+  DOCKER_IMAGE: "${CI_REGISTRY_IMAGE}"  # 如 registry.gitlab.com/group/project 或 hubar.it.com/image
   DOCKER_TAG: "${CI_COMMIT_SHORT_SHA}"  # 使用提交 SHA 作为标签
-  # Trivy 缓存目录（加速漏洞库下载）
-  TRIVY_CACHE_DIR: "${CI_PROJECT_DIR}/.trivycache"
 
 # 构建阶段
 build:
@@ -44,71 +42,40 @@ test:
     - tags
 
 ############################################
-# Jib 构建 -> Trivy 扫描 -> 通过后再推送
+# 第一步 jib 打包到本地 -> 第二步 trivy 扫描 -> 第三步 推送到仓库
+# 三步在同一 job 内完成（镜像在本地 Docker 守护进程中）
 ############################################
 
-# 1) 仅构建镜像为 tar（不推送）
-jib_build_tar:
+package:
   stage: package
   image: gradle:8.5-jdk17
-  script:
-    - |
-      ./gradlew --no-daemon jibBuildTar \
-        -Pjib.to.image="${DOCKER_IMAGE}:${DOCKER_TAG}" \
-        -Pjib.to.image.credHelper= \
-        --info
-  artifacts:
-    paths:
-      - build/jib-image.tar
-    expire_in: 1 hour
-  only:
-    - branches
-    - tags
-
-# 2) Trivy 扫描（扫描失败则流水线失败，阻止推送）
-trivy_scan_image:
-  stage: package
-  image: aquasec/trivy:latest
-  needs: ["jib_build_tar"]
-  cache:
-    key: trivy-cache
-    paths:
-      - .trivycache/
-  script:
-    - trivy --version
-    # 可按需调整阈值：--severity HIGH,CRITICAL / 添加 --ignore-unfixed
-    - trivy image --input build/jib-image.tar --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --no-progress
-  only:
-    - branches
-    - tags
-
-# 3) 扫描通过后再推送到 GitLab Container Registry
-jib_push:
-  stage: package
-  image: gradle:8.5-jdk17
-  needs: ["trivy_scan_image"]
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERT_PATH: ""
   before_script:
-    # 设置 Jib 认证环境变量（使用 GitLab CI/CD Variables）
-    # 方式1: 使用 GitLab Container Registry 内置变量（推荐）
-    # 将 CI_REGISTRY_USER 转换为小写后传递给 JIB_AUTH_USERNAME
-    - export JIB_AUTH_USERNAME=$(echo "${CI_REGISTRY_USER}" | tr '[:upper:]' '[:lower:]')
-    - export JIB_AUTH_PASSWORD="${CI_REGISTRY_PASSWORD}"
-    # 方式2: 如果推送到其他仓库，使用自定义变量
-    # - export JIB_AUTH_USERNAME=$(echo "${DOCKER_USERNAME}" | tr '[:upper:]' '[:lower:]')
-    # - export JIB_AUTH_PASSWORD="${DOCKER_PASSWORD}"
-  script:
+    # 安装 Docker 客户端与 Trivy（连接 dind 守护进程）
+    - apt-get update -qq && apt-get install -y -qq docker.io > /dev/null
     - |
-      ./gradlew --no-daemon jib \
+      curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+    - docker info
+  script:
+    # 第一步：gradlew jib 打包到本地（jibDockerBuild，不推送）
+    - |
+      ./gradlew --no-daemon jibDockerBuild \
         -Pjib.to.image="${DOCKER_IMAGE}:${DOCKER_TAG}" \
         -Pjib.to.image.credHelper= \
         --info
-    # 同时打上 latest 标签（仅默认分支）
+    # 第二步：trivy image <镜像名:tag> 扫描本地镜像，并输出 JSON 报告
+    - trivy image "${DOCKER_IMAGE}:${DOCKER_TAG}" --format json -o trivy-report.json --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --no-progress
+    # 第三步：推送到仓库（扫描通过后才执行）
+    - echo "${CI_REGISTRY_PASSWORD}" | docker login -u "${CI_REGISTRY_USER}" --password-stdin "${CI_REGISTRY}"
+    - docker push "${DOCKER_IMAGE}:${DOCKER_TAG}"
     - |
       if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
-        ./gradlew --no-daemon jib \
-          -Pjib.to.image="${DOCKER_IMAGE}:latest" \
-          -Pjib.to.image.credHelper= \
-          --info
+        docker tag "${DOCKER_IMAGE}:${DOCKER_TAG}" "${DOCKER_IMAGE}:latest"
+        docker push "${DOCKER_IMAGE}:latest"
       fi
   only:
     - branches
